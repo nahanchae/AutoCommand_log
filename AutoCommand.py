@@ -8,18 +8,21 @@ from pymcprotocol import Type3E
 # ==================================================
 # PLC 접속 설정
 # ==================================================
-PLC_IP = "192.168.1.20"
+PLC_IP = "192.168.0.20"
 PLC_PORT = 7777
 
-POLL_SEC = 0.2
-RECONNECT_SEC = 2.0
+POLL_SEC = 0.2          # L29 = 1 일 때 조건부 그룹 읽기 주기
+ALWAYS_POLL_SEC = 1.0   # L29 = 0 일 때 상시 그룹(L29)만 읽는 주기
+RECONNECT_SEC = 5.0
 TIMEOUT_SEC = 2.0
 
 
 # ==================================================
 # 로그 설정
 # ==================================================
-LOG_DIR = Path(r"C:\ca\AirLock\log")
+# LOG_DIR = Path(r"C:\ca\AirLock\log")
+
+LOG_DIR = Path.cwd() / "log"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_LOG_FILES = 30
@@ -28,16 +31,30 @@ MAX_LOG_FILES = 30
 # ==================================================
 # 읽을 PLC 주소 범위
 # ==================================================
-READ_RANGES = [
-    ("D1000", 350),   # D1000 ~ D1349
-    ("D2000", 350),   # D2000 ~ D2349
-    ("D100", 100),    # D100 ~ D199
+# 조건부 읽기를 결정하는 주소 (1 이면 COND_READ_RANGES 읽기)
+ENABLE_DEVICE = "L29"
 
-    ("M0", 64),       # M0 ~ M63
+# 상시 읽기 그룹: 항상 읽음
+ALWAYS_READ_RANGES = [
+    ("L29", 1),
+
+    ("D2001", 4),
+
+    ("D2300", 8),
+    # ("M0", 64),       # M0 ~ M63
     ("M1999", 1),     # M1999
-
-    ("R0", 200),      # R0 ~ R199
+    ("M4000", 2),
+    ("R25000", 25),      # R
     ("X0", 10),       # X0 ~ X9
+]
+
+# 조건부 읽기 그룹: ENABLE_DEVICE(L29) = 1 일 때만 POLL_SEC 주기로 읽음
+COND_READ_RANGES = [
+    # ("D1000", 350),   # D1000 ~ D1349
+    # ("D2000", 350),   # D2000 ~ D2349
+    # ("D100", 100),    # D100 ~ D199
+    ("D1201", 2),
+    ("D2101", 4),
 ]
 
 
@@ -45,8 +62,8 @@ READ_RANGES = [
 # 값 변화 로그를 남길 주소
 # ==================================================
 WATCH_COMMENTS = {
-    "D1100": "CarrierMoveToAirlockCompleteEvent",
-    "D1101": "CarrierMoveToInnerCompleteEvent",
+    # "D1100": "CarrierMoveToAirlockCompleteEvent",
+    # "D1101": "CarrierMoveToInnerCompleteEvent",
 
     "D1201": "CarrierInstallReply",
     "D1202": "CarrierRemoveReply",
@@ -55,12 +72,6 @@ WATCH_COMMENTS = {
     "D2002": "CarrierDownDetectSensor2",
     "D2003": "ShutterOpenSensor",
     "D2004": "ShutterCloseSensor",
-    "D2005": "InstallCompSw",
-    "D2006": "RemoveCompSw",
-    "D2007": "SmokesensorTemperature",
-    "D2008": "SmokesensorSetting_TemperWarningThreshold",
-    "D2009": "SmokesensorSetting_TemperErrorThreshold",
-    "D2010": "SmokesensorHumidity",
 
     "D2101": "CarrierInstallEvent",
     "D2102": "CarrierRemoveEvent",
@@ -68,8 +79,9 @@ WATCH_COMMENTS = {
     "D2200": "CarrierMoveToAirlockCompleteReply",
     "D2201": "CarrierMoveToInnerCompleteReply",
 
-    "M0": "AutoMode",
     "M1999": "ALARM",
+    "M4000": "INSTALL EVENT OVERTIME",
+    "M4001": "REMOVE EVENT OVERTIME",
 }
 
 
@@ -77,10 +89,6 @@ WATCH_COMMENTS = {
 # 값 코멘트
 # ==================================================
 VALUE_COMMENTS = {
-    "M0": {
-        0: "OFF",
-        1: "ON",
-    },
     "M1999": {
         0: "OFF",
         1: "ON",
@@ -95,12 +103,27 @@ VALUE_COMMENTS = {
 STRING_DEVICES = {
     "D2300": ("InstallCarrierID", 4),
     "D2304": ("RemoveCarrierID", 4),
-    "D120": ("WaitCarrierData", 4),
+    # "D120": ("WaitCarrierData", 4),
 }
 
 
+# ==================================================
+# 입고된 캐리어 리스트 (주기 로그)
+# 변화와 상관없이 CARRIER_LIST_INTERVAL_SEC 마다 한 번 기록
+# ==================================================
+CARRIER_LIST_DEVICES = {
+    "R25000": ("InputCarrierId#1", 4),
+    "R25004": ("InputCarrierId#2", 4),
+    "R25008": ("InputCarrierId#3", 4),
+    "R25012": ("InputCarrierId#4", 4),
+    "R25016": ("InputCarrierId#5", 4),
+}
+
+CARRIER_LIST_INTERVAL_SEC = 60
+
+
 WORD_DEVS = {"R", "D", "W"}
-BIT_DEVS = {"M", "X", "Y", "B"}
+BIT_DEVS = {"M", "X", "Y", "B", "L"}
 
 
 # ==================================================
@@ -295,10 +318,10 @@ def read_range_to_dict(mc, head_device, read_size):
 # ==================================================
 # 등록된 전체 범위 읽기
 # ==================================================
-def read_all(mc):
+def read_all(mc, read_ranges):
     data = {}
 
-    for head_device, read_size in READ_RANGES:
+    for head_device, read_size in read_ranges:
         one_range_data = read_range_to_dict(
             mc=mc,
             head_device=head_device,
@@ -410,9 +433,11 @@ def process_carrier_events(data, event_state):
     )
 
     if install_condition and not event_state["install_logged"]:
-        write_carrier_event_log(
-            f"InstallCarrierID : {install_carrier_id} 입고 완료"
+        write_carrier_block(
+            "입고 완료",
+            [f"InstallCarrierID={install_carrier_id}"]
         )
+        write_carrier_list_log(data)
 
         event_state["install_logged"] = True
 
@@ -430,15 +455,70 @@ def process_carrier_events(data, event_state):
     )
 
     if remove_condition and not event_state["remove_logged"]:
-        write_carrier_event_log(
-            f"RemoveCarrierID : {remove_carrier_id} 출고 완료"
+        write_carrier_block(
+            "출고 완료",
+            [f"RemoveCarrierID={remove_carrier_id}"]
         )
+        write_carrier_list_log(data)
 
         event_state["remove_logged"] = True
 
     # D2102, D1202가 둘 다 0으로 떨어지면 다음 출고 로그 가능
     if remove_event == 0 and remove_reply == 0:
         event_state["remove_logged"] = False
+
+
+# ==================================================
+# 입고된 캐리어 리스트 주기 로그
+# ==================================================
+def process_carrier_list(data, list_state):
+    now = time.monotonic()
+    last = list_state.get("last_time")
+
+    # 아직 주기가 안 됐으면 기록하지 않음 (최초 1회는 바로 기록)
+    if last is not None and now - last < CARRIER_LIST_INTERVAL_SEC:
+        return
+
+    write_carrier_list_log(data)
+
+    list_state["last_time"] = now
+
+
+def write_carrier_list_log(data):
+    items = []
+
+    for start_device, info in CARRIER_LIST_DEVICES.items():
+        label, word_length = info
+
+        carrier_id = decode_string_from_data(
+            data=data,
+            start_device=start_device,
+            word_length=word_length
+        )
+
+        items.append(f"{label}={carrier_id or '-'}")
+
+    write_carrier_block("입고된 캐리어 리스트", items)
+
+
+# ==================================================
+# 구분선으로 감싼 블록 형태의 Carrier 로그
+# ==================================================
+def write_carrier_block(title, body_lines):
+    separator = "-" * 63
+
+    lines = [
+        separator,
+        f"{now_text()} | {title} | ",
+        *body_lines,
+        separator,
+    ]
+    text = "\n".join(lines)
+
+    print(text)
+
+    with open(get_carrier_event_log_path(), "a", encoding="utf-8") as f:
+        f.write(text + "\n")
 
 
 # ==================================================
@@ -450,7 +530,9 @@ def print_start_info():
     print("==========================================")
     print(f"PLC IP        : {PLC_IP}")
     print(f"PLC PORT      : {PLC_PORT}")
-    print(f"POLL SEC      : {POLL_SEC}")
+    print(f"ENABLE DEVICE : {ENABLE_DEVICE}")
+    print(f"POLL SEC      : {POLL_SEC} ({ENABLE_DEVICE}=1)")
+    print(f"ALWAYS POLL   : {ALWAYS_POLL_SEC} ({ENABLE_DEVICE}=0)")
     print(f"RECONNECT SEC : {RECONNECT_SEC}")
     print(f"LOG DIR       : {LOG_DIR}")
     print(f"MAX LOG FILES : {MAX_LOG_FILES}")
@@ -475,8 +557,16 @@ def main():
         "remove_logged": False,
     }
 
+    # 입고된 캐리어 리스트 마지막 기록 시각
+    carrier_list_state = {
+        "last_time": None,
+    }
+
     # 로그 삭제를 하루에 한 번만 실행하기 위한 변수
     last_cleanup_day = None
+
+    # ENABLE_DEVICE(L29) 이전값 (상태 변화 로그용)
+    prev_enable = None
 
     while True:
         mc = None
@@ -492,7 +582,27 @@ def main():
                     cleanup_old_logs()
                     last_cleanup_day = today
 
-                data = read_all(mc)
+                # 상시 그룹 읽기 (L29)
+                always_data = read_all(mc, ALWAYS_READ_RANGES)
+                enable = int(always_data.get(ENABLE_DEVICE, 0) or 0)
+
+                if prev_enable is not None and prev_enable != enable:
+                    write_plc_log(
+                        f"{ENABLE_DEVICE} | 조건부 읽기 "
+                        f"{'시작' if enable == 1 else '중지'} | "
+                        f"{prev_enable} -> {enable}"
+                    )
+                prev_enable = enable
+
+                # L29 = 0 이면 조건부 그룹은 읽지 않고 1초 대기
+                # (이전값은 그대로 유지되므로 재개 시 잘못된 변화 로그가 남지 않음)
+                if enable != 1:
+                    time.sleep(ALWAYS_POLL_SEC)
+                    continue
+
+                # 조건부 그룹 읽기
+                data = read_all(mc, COND_READ_RANGES)
+                data.update(always_data)
 
                 # 일반 주소 변화 로그
                 process_normal_changes(data, prev_values)
@@ -502,6 +612,9 @@ def main():
 
                 # Carrier 입고/출고 완료 전용 로그
                 process_carrier_events(data, event_state)
+
+                # 입고된 캐리어 리스트 (1분 주기)
+                process_carrier_list(data, carrier_list_state)
 
                 time.sleep(POLL_SEC)
 
