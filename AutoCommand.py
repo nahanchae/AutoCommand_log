@@ -11,8 +11,7 @@ from pymcprotocol import Type3E
 PLC_IP = "192.168.0.20"
 PLC_PORT = 7777
 
-POLL_SEC = 0.2          # L29 = 1 일 때 조건부 그룹 읽기 주기
-ALWAYS_POLL_SEC = 1.0   # L29 = 0 일 때 상시 그룹(L29)만 읽는 주기
+POLL_SEC = 0.2          # 전체 주소 읽기 주기
 RECONNECT_SEC = 5.0
 TIMEOUT_SEC = 2.0
 
@@ -31,30 +30,25 @@ MAX_LOG_FILES = 30
 # ==================================================
 # 읽을 PLC 주소 범위
 # ==================================================
-# 조건부 읽기를 결정하는 주소 (1 이면 COND_READ_RANGES 읽기)
-ENABLE_DEVICE = "L29"
+# 전체 읽기 범위: POLL_SEC 주기로 항상 읽음
+READ_RANGES = [
+    # ("L29", 1),
 
-# 상시 읽기 그룹: 항상 읽음
-ALWAYS_READ_RANGES = [
-    ("L29", 1),
+    # ("D1000", 350),   # D1000 ~ D1349
+    # ("D2000", 350),   # D2000 ~ D2349
+    # ("D100", 100),    # D100 ~ D199
+    ("D1201", 2),
 
-    ("D2001", 4),
+    # ("D2001", 4),
+    ("D2101", 4),
 
     ("D2300", 8),
     # ("M0", 64),       # M0 ~ M63
     ("M1999", 1),     # M1999
     ("M4000", 2),
+    ("M6000", 10),   
     ("R25000", 25),      # R
-    ("X0", 10),       # X0 ~ X9
-]
-
-# 조건부 읽기 그룹: ENABLE_DEVICE(L29) = 1 일 때만 POLL_SEC 주기로 읽음
-COND_READ_RANGES = [
-    # ("D1000", 350),   # D1000 ~ D1349
-    # ("D2000", 350),   # D2000 ~ D2349
-    # ("D100", 100),    # D100 ~ D199
-    ("D1201", 2),
-    ("D2101", 4),
+    ("X0", 30),       # X0 ~ X9
 ]
 
 
@@ -68,16 +62,18 @@ WATCH_COMMENTS = {
     "D1201": "CarrierInstallReply",
     "D1202": "CarrierRemoveReply",
 
-    "D2001": "CarrierUpDetectSensor1",
-    "D2002": "CarrierDownDetectSensor2",
-    "D2003": "ShutterOpenSensor",
-    "D2004": "ShutterCloseSensor",
+    "X10": "CarrierUpDetectSensor1",
+    "X11": "CarrierDownDetectSensor2",
+    "X16": "ShutterOpenSensor",
+    "X17": "ShutterCloseSensor",
 
     "D2101": "CarrierInstallEvent",
     "D2102": "CarrierRemoveEvent",
 
     "D2200": "CarrierMoveToAirlockCompleteReply",
     "D2201": "CarrierMoveToInnerCompleteReply",
+
+    "L29": "L29",
 
     "M1999": "ALARM",
     "M4000": "INSTALL EVENT OVERTIME",
@@ -122,6 +118,27 @@ CARRIER_LIST_DEVICES = {
 CARRIER_LIST_INTERVAL_SEC = 60
 
 
+# ==================================================
+# RFID 인식 결과 (M6000 = 1 일 때만 읽음)
+# READ_RANGES 와 분리해서 M6000 이 0 -> 1 이 될 때 1회만 읽고 기록
+# ==================================================
+TAG_ENABLE_DEVICE = "M6000"
+
+TAG_READ_RANGES = [
+    ("R6200", 18),    # R6200 ~ R6217
+]
+
+# 태그별 결과 주소
+# (이름, ID 시작주소, ID 워드수, 인식횟수(Count) 주소, 신호세기(RSSI) 주소)
+RFID_TAG_DEVICES = [
+    ("TAG1", "R6200", 4, "R6212", "R6215"),
+    ("TAG2", "R6204", 4, "R6213", "R6216"),
+    ("TAG3", "R6208", 4, "R6214", "R6217"),
+]
+
+# RSSI 원시값 x 0.1 = dBm
+RSSI_SCALE = 0.1
+
 WORD_DEVS = {"R", "D", "W"}
 BIT_DEVS = {"M", "X", "Y", "B", "L"}
 
@@ -134,37 +151,27 @@ def now_text():
 
 
 # ==================================================
-# 로그 파일 경로
+# 로그 파일 경로 (하루 1개 파일에 모든 로그 기록)
 # ==================================================
-def get_plc_log_path():
+def get_log_path():
     day = datetime.now().strftime("%Y%m%d")
     return LOG_DIR / f"plc_log_{day}.txt"
-
-
-def get_carrier_event_log_path():
-    day = datetime.now().strftime("%Y%m%d")
-    return LOG_DIR / f"carrier_event_{day}.txt"
 
 
 # ==================================================
 # 로그 쓰기
 # ==================================================
+def append_log(text):
+    with open(get_log_path(), "a", encoding="utf-8") as f:
+        f.write(text + "\n")
+
+
 def write_plc_log(message):
     line = f"{now_text()} | {message}"
 
     print(line)
 
-    with open(get_plc_log_path(), "a", encoding="utf-8") as f:
-        f.write(line + "\n")
-
-
-def write_carrier_event_log(message):
-    line = f"{now_text()} | {message}"
-
-    print("[CARRIER]", line)
-
-    with open(get_carrier_event_log_path(), "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    append_log(line)
 
 
 # ==================================================
@@ -173,7 +180,7 @@ def write_carrier_event_log(message):
 def cleanup_old_logs():
     patterns = [
         "plc_log_*.txt",
-        "carrier_event_*.txt",
+        "carrier_event_*.txt",   # 예전 버전에서 남은 파일 정리용
     ]
 
     for pattern in patterns:
@@ -502,6 +509,69 @@ def write_carrier_list_log(data):
 
 
 # ==================================================
+# 태그 리스트 로그 (M6000 = 1 일 때)
+# ==================================================
+def process_tag_list(mc, data, tag_state):
+    enable = int(data.get(TAG_ENABLE_DEVICE, 0) or 0)
+
+    # M6000 이 0 으로 떨어지면 다음 기록 가능
+    if enable != 1:
+        tag_state["logged"] = False
+        return
+
+    # M6000 = 1 유지 중에는 중복 기록하지 않음
+    if tag_state["logged"]:
+        return
+
+    tag_data = read_all(mc, TAG_READ_RANGES)
+
+    lines = []
+    read_count = 0
+
+    for name, id_device, id_length, count_device, rssi_device in RFID_TAG_DEVICES:
+        tag_id = decode_string_from_data(
+            data=tag_data,
+            start_device=id_device,
+            word_length=id_length
+        )
+
+        # 태그 ID 가 비어 있으면 미인식
+        if tag_id == "":
+            lines.append(f"{name} | 미인식")
+            continue
+
+        read_count += 1
+
+        count = int(tag_data.get(count_device, 0) or 0)
+        # RSSI: 0.1 스케일, dBm 단위 (예: -523 -> -52.3dBm)
+        rssi = to_signed16(tag_data.get(rssi_device, 0)) * RSSI_SCALE
+
+        lines.append(
+            f"{name} | ID={tag_id} | Count={count} | RSSI={rssi:.1f}dBm"
+        )
+
+    write_carrier_block(
+        f"RFID 인식 결과 | 인식 {read_count}/{len(RFID_TAG_DEVICES)}",
+        lines
+    )
+
+    tag_state["logged"] = True
+
+
+# ==================================================
+# 16비트 부호 있는 값 변환 (RSSI 음수 dBm 대응)
+# 예: 65484 -> -52
+# ==================================================
+def to_signed16(value):
+    value = int(value or 0) & 0xFFFF
+
+    if value >= 0x8000:
+        value -= 0x10000
+
+    return value
+
+
+# ==================================================
 # 구분선으로 감싼 블록 형태의 Carrier 로그
 # ==================================================
 def write_carrier_block(title, body_lines):
@@ -517,8 +587,7 @@ def write_carrier_block(title, body_lines):
 
     print(text)
 
-    with open(get_carrier_event_log_path(), "a", encoding="utf-8") as f:
-        f.write(text + "\n")
+    append_log(text)
 
 
 # ==================================================
@@ -530,9 +599,7 @@ def print_start_info():
     print("==========================================")
     print(f"PLC IP        : {PLC_IP}")
     print(f"PLC PORT      : {PLC_PORT}")
-    print(f"ENABLE DEVICE : {ENABLE_DEVICE}")
-    print(f"POLL SEC      : {POLL_SEC} ({ENABLE_DEVICE}=1)")
-    print(f"ALWAYS POLL   : {ALWAYS_POLL_SEC} ({ENABLE_DEVICE}=0)")
+    print(f"POLL SEC      : {POLL_SEC}")
     print(f"RECONNECT SEC : {RECONNECT_SEC}")
     print(f"LOG DIR       : {LOG_DIR}")
     print(f"MAX LOG FILES : {MAX_LOG_FILES}")
@@ -562,11 +629,13 @@ def main():
         "last_time": None,
     }
 
+    # 태그 리스트 중복 방지 상태
+    tag_state = {
+        "logged": False,
+    }
+
     # 로그 삭제를 하루에 한 번만 실행하기 위한 변수
     last_cleanup_day = None
-
-    # ENABLE_DEVICE(L29) 이전값 (상태 변화 로그용)
-    prev_enable = None
 
     while True:
         mc = None
@@ -582,27 +651,8 @@ def main():
                     cleanup_old_logs()
                     last_cleanup_day = today
 
-                # 상시 그룹 읽기 (L29)
-                always_data = read_all(mc, ALWAYS_READ_RANGES)
-                enable = int(always_data.get(ENABLE_DEVICE, 0) or 0)
-
-                if prev_enable is not None and prev_enable != enable:
-                    write_plc_log(
-                        f"{ENABLE_DEVICE} | 조건부 읽기 "
-                        f"{'시작' if enable == 1 else '중지'} | "
-                        f"{prev_enable} -> {enable}"
-                    )
-                prev_enable = enable
-
-                # L29 = 0 이면 조건부 그룹은 읽지 않고 1초 대기
-                # (이전값은 그대로 유지되므로 재개 시 잘못된 변화 로그가 남지 않음)
-                if enable != 1:
-                    time.sleep(ALWAYS_POLL_SEC)
-                    continue
-
-                # 조건부 그룹 읽기
-                data = read_all(mc, COND_READ_RANGES)
-                data.update(always_data)
+                # 전체 범위 읽기
+                data = read_all(mc, READ_RANGES)
 
                 # 일반 주소 변화 로그
                 process_normal_changes(data, prev_values)
@@ -615,6 +665,9 @@ def main():
 
                 # 입고된 캐리어 리스트 (1분 주기)
                 process_carrier_list(data, carrier_list_state)
+
+                # 태그 리스트 (M6000 = 1 일 때만 별도 읽기)
+                process_tag_list(mc, data, tag_state)
 
                 time.sleep(POLL_SEC)
 
