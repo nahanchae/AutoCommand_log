@@ -278,9 +278,8 @@ def connect_plc():
     except Exception:
         pass
 
-    print("[INFO] PLC 연결 시도 중...")
+    print("[INFO] PLC 연결 시도 중...", flush=True)
     mc.connect(PLC_IP, PLC_PORT)
-    print(f"[OK] PLC 연결 성공: {PLC_IP}:{PLC_PORT}")
 
     return mc
 
@@ -677,11 +676,27 @@ def main():
     # 로그 삭제를 하루에 한 번만 실행하기 위한 변수
     last_cleanup_day = None
 
+    # 연결 끊김 시각 / 재접속 시도 횟수 (재접속 로그용)
+    disconnected_at = None
+    retry_count = 0
+
     while True:
         mc = None
 
         try:
             mc = connect_plc()
+
+            if disconnected_at is None:
+                write_plc_log(f"[CONNECT] PLC 연결 성공 | {PLC_IP}:{PLC_PORT}")
+            else:
+                down_sec = time.monotonic() - disconnected_at
+                write_plc_log(
+                    f"[RECONNECT] PLC 재접속 성공 | {PLC_IP}:{PLC_PORT} | "
+                    f"재시도 {retry_count}회 | 끊김 {down_sec:.1f}초"
+                )
+
+            disconnected_at = None
+            retry_count = 0
 
             while True:
                 today = datetime.now().date()
@@ -712,16 +727,33 @@ def main():
                 time.sleep(POLL_SEC)
 
         except KeyboardInterrupt:
-            print("\n[STOP] 사용자 종료")
+            print()
+            write_plc_log("[STOP] 사용자 종료")
             close_plc(mc)
             break
 
         except Exception as e:
-            print(f"[ERR] PLC 통신 오류: {e}")
-            print(f"[INFO] {RECONNECT_SEC}초 후 재접속 시도")
+            if disconnected_at is None:
+                # 처음 끊긴 시점: 연결 끊김 기록
+                disconnected_at = time.monotonic()
+                write_plc_log(f"[DISCONNECT] PLC 통신 오류 | {e}")
+            else:
+                # 재접속 실패: 매번 기록
+                write_plc_log(
+                    f"[RETRY FAIL] PLC 재접속 실패 {retry_count}회 | {e}"
+                )
+
+            retry_count += 1
+            print(f"[INFO] {RECONNECT_SEC}초 후 재접속 시도 ({retry_count}회)", flush=True)
 
             close_plc(mc)
-            time.sleep(RECONNECT_SEC)
+
+            try:
+                time.sleep(RECONNECT_SEC)
+            except KeyboardInterrupt:
+                print()
+                write_plc_log("[STOP] 사용자 종료")
+                break
 
 
 if __name__ == "__main__":
