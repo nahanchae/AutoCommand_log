@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 from datetime import datetime
 from pathlib import Path
@@ -22,7 +23,14 @@ TIMEOUT_SEC = 2.0
 # ==================================================
 # LOG_DIR = Path(r"C:\ca\AirLock\log")
 
-LOG_DIR = Path.cwd() / "log"
+# exe(PyInstaller)로 실행하면 exe 가 있는 폴더, 스크립트면 .py 가 있는 폴더 기준
+# (작업 스케줄러/시작프로그램으로 실행하면 현재 폴더가 C:\Windows\System32 등이 될 수 있음)
+if getattr(sys, "frozen", False):
+    BASE_DIR = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
+
+LOG_DIR = BASE_DIR / "log"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 MAX_LOG_FILES = 30
@@ -205,9 +213,9 @@ def cleanup_old_logs():
         for file_path in old_files:
             try:
                 file_path.unlink()
-                print(f"[CLEANUP] 오래된 로그 삭제: {file_path}")
+                write_plc_log(f"[CLEANUP] 오래된 로그 삭제: {file_path.name}")
             except Exception as e:
-                print(f"[CLEANUP ERR] {file_path} 삭제 실패: {e}")
+                write_plc_log(f"[CLEANUP ERR] {file_path.name} 삭제 실패: {e}")
 
 
 # ==================================================
@@ -628,6 +636,35 @@ def disable_quick_edit():
 
 
 # ==================================================
+# 중복 실행 방지 (Windows)
+# 백그라운드 실행 중에 exe 를 한 번 더 실행해도 로그가 중복 기록되지 않도록 함
+# ==================================================
+_instance_mutex = None
+
+
+def is_already_running():
+    global _instance_mutex
+
+    if os.name != "nt":
+        return False
+
+    try:
+        import ctypes
+
+        ERROR_ACCESS_DENIED = 5      # 다른 계정(예: SYSTEM)으로 이미 실행 중
+        ERROR_ALREADY_EXISTS = 183
+
+        kernel32 = ctypes.windll.kernel32
+        _instance_mutex = kernel32.CreateMutexW(
+            None, False, "Global\\AirlockPlcLogger"
+        )
+
+        return kernel32.GetLastError() in (ERROR_ALREADY_EXISTS, ERROR_ACCESS_DENIED)
+    except Exception:
+        return False
+
+
+# ==================================================
 # 시작 정보 출력
 # ==================================================
 def print_start_info():
@@ -647,9 +684,15 @@ def print_start_info():
 # 메인 함수
 # ==================================================
 def main():
+    if is_already_running():
+        print("[INFO] 이미 실행 중입니다. 종료합니다.")
+        return
+
     disable_quick_edit()
 
     print_start_info()
+
+    write_plc_log(f"[START] 프로그램 시작 | PID={os.getpid()}")
 
     # 일반 값 이전값 저장
     prev_values = {}
