@@ -1,3 +1,4 @@
+import os
 import time
 from datetime import datetime
 from pathlib import Path
@@ -162,16 +163,22 @@ def get_log_path():
 # 로그 쓰기
 # ==================================================
 def append_log(text):
-    with open(get_log_path(), "a", encoding="utf-8") as f:
-        f.write(text + "\n")
+    # 파일 기록 실패(다른 프로그램이 잠근 경우 등)로 PLC 루프가 끊기지 않도록 보호
+    try:
+        with open(get_log_path(), "a", encoding="utf-8") as f:
+            f.write(text + "\n")
+            f.flush()
+    except Exception as e:
+        print(f"[LOG ERR] 로그 파일 기록 실패: {e}", flush=True)
 
 
 def write_plc_log(message):
     line = f"{now_text()} | {message}"
 
-    print(line)
-
+    # 파일에 먼저 기록 (콘솔 출력이 멈춰도 로그는 남도록)
     append_log(line)
+
+    print(line, flush=True)
 
 
 # ==================================================
@@ -585,9 +592,40 @@ def write_carrier_block(title, body_lines):
     ]
     text = "\n".join(lines)
 
-    print(text)
-
+    # 파일에 먼저 기록 (콘솔 출력이 멈춰도 로그는 남도록)
     append_log(text)
+
+    print(text, flush=True)
+
+
+# ==================================================
+# Windows CMD 빠른 편집 모드(QuickEdit) 끄기
+# 콘솔 창을 마우스로 클릭/드래그하면 "선택" 상태가 되어
+# print() 에서 프로그램이 멈추고, 엔터를 쳐야 다시 진행되는 현상 방지
+# ==================================================
+def disable_quick_edit():
+    if os.name != "nt":
+        return
+
+    try:
+        import ctypes
+
+        kernel32 = ctypes.windll.kernel32
+
+        STD_INPUT_HANDLE = -10
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+
+        handle = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        mode = ctypes.c_uint32()
+
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+
+        new_mode = (mode.value | ENABLE_EXTENDED_FLAGS) & ~ENABLE_QUICK_EDIT_MODE
+        kernel32.SetConsoleMode(handle, new_mode)
+    except Exception:
+        pass
 
 
 # ==================================================
@@ -610,6 +648,8 @@ def print_start_info():
 # 메인 함수
 # ==================================================
 def main():
+    disable_quick_edit()
+
     print_start_info()
 
     # 일반 값 이전값 저장
