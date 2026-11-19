@@ -63,10 +63,14 @@ CARRIER_LIST_MAX = 20
 # CARRIER_ID 1개당 워드 수 (4워드 = 8문자)
 CARRIER_WORDS = 4
 
+# PLC 쓰기는 값이 바뀌었을 때만 하고, 추가로 이 주기(초)마다 1번 같은 값을 다시 씀
+# (PLC 재시작 등으로 PLC 쪽 값이 지워졌을 때 복구용)
+PLC_REFRESH_SEC = 60
+
 
 [RUN]
-# DB 조회 + PLC 전송 주기 (초)
-POLL_SEC = 1.0
+# DB 조회 주기 (초) - 주기마다 SERVER_ID 일치하는 모든 행을 1번에 읽음
+POLL_SEC = 5.0
 
 # DB / PLC 끊겼을 때 재접속 대기 (초)
 RECONNECT_SEC = 5.0

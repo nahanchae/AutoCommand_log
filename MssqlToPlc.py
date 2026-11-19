@@ -154,8 +154,9 @@ def load_config():
             "carrier_list_device": get("PLC", "CARRIER_LIST_DEVICE", "R6600").upper(),
             "carrier_list_max": int(get("PLC", "CARRIER_LIST_MAX", "20")),
             "carrier_words": int(get("PLC", "CARRIER_WORDS", "4")),
+            "plc_refresh_sec": float(get("PLC", "PLC_REFRESH_SEC", "60")),
 
-            "poll_sec": float(get("RUN", "POLL_SEC", "1.0")),
+            "poll_sec": float(get("RUN", "POLL_SEC", "5.0")),
             "reconnect_sec": float(get("RUN", "RECONNECT_SEC", "5.0")),
             "log_dir": get("RUN", "LOG_DIR", ""),
             "max_log_files": int(get("RUN", "MAX_LOG_FILES", "30")),
@@ -242,37 +243,13 @@ def clean_text(value):
     return str(value).strip()
 
 
-def read_port_carrier(conn, cfg):
-    """SERVER_ID 일치 + FLOW_TYPE + CURRENT_PORT_ID 조건의 CARRIER_ID 1개"""
+def read_rows(conn, cfg):
+    """SERVER_ID 가 일치하는 모든 행을 한 번에 읽음 (주기당 DB 조회 1회)"""
     sql = (
-        f"SELECT TOP 1 CARRIER_ID FROM {quote_table(cfg['db_table'])} "
-        "WHERE SERVER_ID = ? AND FLOW_TYPE = ? AND CURRENT_PORT_ID = ? "
-        "AND NULLIF(LTRIM(RTRIM(CARRIER_ID)), '') IS NOT NULL "
-        "ORDER BY CARRIER_ID"
-    )
-
-    cursor = conn.cursor()
-    try:
-        cursor.execute(sql, cfg["server_id"], cfg["flow_type"], cfg["port_id"])
-        row = cursor.fetchone()
-    finally:
-        cursor.close()
-
-    return clean_text(row[0]) if row else ""
-
-
-def read_carrier_list(conn, cfg):
-    """SERVER_ID 일치 + 포트/차량/목적지 중 하나라도 값이 있는 CARRIER_ID 목록"""
-    # NULL 뿐 아니라 빈 문자열/공백도 '값 없음' 으로 취급
-    sql = (
-        f"SELECT CARRIER_ID FROM {quote_table(cfg['db_table'])} "
+        "SELECT CARRIER_ID, FLOW_TYPE, CURRENT_PORT_ID, "
+        "CURRENT_VEHICLE_ID, TARGET_PORT_ID "
+        f"FROM {quote_table(cfg['db_table'])} "
         "WHERE SERVER_ID = ? "
-        "AND NULLIF(LTRIM(RTRIM(CARRIER_ID)), '') IS NOT NULL "
-        "AND ("
-        "   NULLIF(LTRIM(RTRIM(CURRENT_PORT_ID)), '') IS NOT NULL"
-        "   OR NULLIF(LTRIM(RTRIM(CURRENT_VEHICLE_ID)), '') IS NOT NULL"
-        "   OR NULLIF(LTRIM(RTRIM(TARGET_PORT_ID)), '') IS NOT NULL"
-        ") "
         "ORDER BY CARRIER_ID"
     )
 
@@ -283,11 +260,60 @@ def read_carrier_list(conn, cfg):
     finally:
         cursor.close()
 
-    # 같은 CARRIER_ID 가 여러 행이면 1번만
     result = []
     for row in rows:
-        carrier_id = clean_text(row[0])
-        if carrier_id and carrier_id not in result:
+        result.append({
+            "CARRIER_ID": clean_text(row[0]),
+            "FLOW_TYPE": clean_text(row[1]),
+            "CURRENT_PORT_ID": clean_text(row[2]),
+            "CURRENT_VEHICLE_ID": clean_text(row[3]),
+            "TARGET_PORT_ID": clean_text(row[4]),
+        })
+
+    return result
+
+
+def same_flow_type(db_value, cfg_value):
+    """FLOW_TYPE 비교 (DB 컬럼이 숫자/문자 어느 형식이어도 2 == '2' == 2.0)"""
+    if db_value == "":
+        return False
+
+    try:
+        return float(db_value) == float(cfg_value)
+    except ValueError:
+        return db_value == cfg_value
+
+
+def find_port_carrier(rows, cfg):
+    """FLOW_TYPE = 설정값 이고 CURRENT_PORT_ID = 설정값 인 CARRIER_ID 1개
+    (여러 개면 CARRIER_ID 순으로 첫 번째)"""
+    for row in rows:
+        if (
+            row["CARRIER_ID"]
+            and same_flow_type(row["FLOW_TYPE"], cfg["flow_type"])
+            and row["CURRENT_PORT_ID"] == cfg["port_id"]
+        ):
+            return row["CARRIER_ID"]
+
+    return ""
+
+
+def find_carrier_list(rows):
+    """CURRENT_PORT_ID / CURRENT_VEHICLE_ID / TARGET_PORT_ID 중 하나라도 값이 있는
+    CARRIER_ID 목록 (NULL, 빈 문자열, 공백은 '값 없음')"""
+    result = []
+
+    for row in rows:
+        carrier_id = row["CARRIER_ID"]
+
+        if not carrier_id or carrier_id in result:
+            continue
+
+        if (
+            row["CURRENT_PORT_ID"]
+            or row["CURRENT_VEHICLE_ID"]
+            or row["TARGET_PORT_ID"]
+        ):
             result.append(carrier_id)
 
     return result
@@ -353,10 +379,18 @@ def process_once(conn, mc, cfg, state):
     # ------------------------------
     # 1) R6500 : 포트 캐리어 1개
     # ------------------------------
-    port_carrier = read_port_carrier(conn, cfg)
+    rows = read_rows(conn, cfg)
 
-    write_words(mc, cfg["port_carrier_device"],
-                string_to_words(port_carrier, words))
+    # PLC 쓰기는 값이 바뀌었을 때 + PLC_REFRESH_SEC 마다 1번 (PLC 쪽 값이 지워진 경우 대비)
+    now = time.monotonic()
+    last_write = state.get("last_write_time")
+    refresh = last_write is None or now - last_write >= cfg["plc_refresh_sec"]
+
+    port_carrier = find_port_carrier(rows, cfg)
+
+    if refresh or port_carrier != state.get("port_carrier"):
+        write_words(mc, cfg["port_carrier_device"],
+                    string_to_words(port_carrier, words))
 
     if port_carrier != state.get("port_carrier"):
         dev_text = device_range_text(cfg["port_carrier_device"], words)
@@ -379,16 +413,17 @@ def process_once(conn, mc, cfg, state):
     # ------------------------------
     # 2) R6600~ : 캐리어 목록
     # ------------------------------
-    carrier_list = read_carrier_list(conn, cfg)
+    carrier_list = find_carrier_list(rows)
     max_count = cfg["carrier_list_max"]
     send_list = carrier_list[:max_count]
 
-    values = []
-    for i in range(max_count):
-        carrier_id = send_list[i] if i < len(send_list) else ""
-        values.extend(string_to_words(carrier_id, words))
+    if refresh or carrier_list != state.get("carrier_list"):
+        values = []
+        for i in range(max_count):
+            carrier_id = send_list[i] if i < len(send_list) else ""
+            values.extend(string_to_words(carrier_id, words))
 
-    write_words(mc, cfg["carrier_list_device"], values)
+        write_words(mc, cfg["carrier_list_device"], values)
 
     if carrier_list != state.get("carrier_list"):
         dev, base = split_device(cfg["carrier_list_device"])
@@ -422,6 +457,9 @@ def process_once(conn, mc, cfg, state):
         )
 
         state["carrier_list"] = carrier_list
+
+    if refresh:
+        state["last_write_time"] = now
 
 
 # ==================================================
