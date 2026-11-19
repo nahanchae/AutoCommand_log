@@ -225,6 +225,17 @@ def close_db(conn):
         pass
 
 
+FLOW_TYPE_NAMES = {
+    "1": "IN(정물류)",
+    "2": "OUT(역물류)",
+}
+
+
+def flow_type_text(value):
+    name = FLOW_TYPE_NAMES.get(str(value).strip())
+    return f"{value}({name.split('(')[0]})" if name else str(value)
+
+
 def clean_text(value):
     if value is None:
         return ""
@@ -351,7 +362,7 @@ def process_once(conn, mc, cfg, state):
         dev_text = device_range_text(cfg["port_carrier_device"], words)
 
         write_log(
-            f"[PORT CARRIER] FLOW_TYPE={cfg['flow_type']} | "
+            f"[PORT CARRIER] FLOW_TYPE={flow_type_text(cfg['flow_type'])} | "
             f"CURRENT_PORT_ID={cfg['port_id']} | "
             f"{state.get('port_carrier') or '-'} -> {port_carrier or '-'} | "
             f"{dev_text} 전송"

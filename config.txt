@@ -10,10 +10,10 @@
 SERVER = 127.0.0.1,1433
 
 # 데이터베이스 이름
-DATABASE = MyDatabase
+DATABASE = ivCS_Dongan2
 
 # 테이블 이름 (스키마 포함 가능: dbo.CARRIER_INFO)
-TABLE = dbo.CARRIER_INFO
+TABLE = TB_BASE_CARRIER
 
 # ODBC 드라이버 이름
 #   SQL Server                    : Windows 기본 내장 (설치 불필요)
@@ -26,7 +26,7 @@ DRIVER = SQL Server
 #   no  : SQL 인증 (USER / PASSWORD 사용)
 TRUSTED_CONNECTION = no
 USER = sa
-PASSWORD = password
+PASSWORD = 여기에_비밀번호_입력
 
 TRUST_SERVER_CERTIFICATE = yes
 
@@ -36,9 +36,11 @@ TIMEOUT_SEC = 5
 
 [FILTER]
 # 이 값과 SERVER_ID 컬럼이 같은 행만 읽음
-SERVER_ID = SERVER01
+SERVER_ID = Idc_a4e1
 
 # R6500 전송 조건: FLOW_TYPE = 이 값 이고 CURRENT_PORT_ID = 이 값
+# FLOW_TYPE : 1 = IN (정물류), 2 = OUT (역물류)
+# PORT_ID 예: P1 / A4BFN17C_SP01 / A4CIO02C_BP01 / A4BFN22C_DP01 / A4BFN23C_IP01 / A4BFN21C_CP01
 FLOW_TYPE = 2
 PORT_ID = P1
 
