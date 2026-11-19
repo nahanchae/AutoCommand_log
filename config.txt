@@ -1,0 +1,98 @@
+# ==================================================
+# AutoCommand 설정 파일 (PLC 로그 + MSSQL -> PLC 전송)
+# - exe(또는 .py)와 같은 폴더에 둡니다.
+# - 값을 바꾼 뒤 프로그램을 다시 시작하면 적용됩니다.
+# - '#' 또는 ';' 로 시작하는 줄은 주석입니다.
+# ==================================================
+
+[MSSQL]
+# MSSQL -> PLC 전송 사용 여부 (no 면 기존 PLC 로그 기능만 동작)
+ENABLE = yes
+
+# DB 서버 주소 (MSSQL 이 설치된 PC 의 IP)
+#   같은 PC 면 127.0.0.1
+#   이름 있는 인스턴스면 PC이름\인스턴스 (예: DBPC\SQLEXPRESS) 로 쓰고 DB_PORT 는 비움
+DB_IP = 127.0.0.1
+
+# DB 포트 (MSSQL 기본 1433, 비워두면 기본값/인스턴스 이름으로 접속)
+DB_PORT = 1433
+
+# 데이터베이스 이름
+DATABASE = ivCS_Dongan2
+
+# 테이블 이름 (스키마 포함 가능: dbo.CARRIER_INFO)
+TABLE = TB_BASE_CARRIER
+
+# ODBC 드라이버 이름
+#   SQL Server                    : Windows 기본 내장 (설치 불필요)
+#   ODBC Driver 17 for SQL Server : 별도 설치 시
+#   ODBC Driver 18 for SQL Server : 별도 설치 시 (TRUST_SERVER_CERTIFICATE = yes 권장)
+DRIVER = SQL Server
+
+# 로그인 방식
+#   yes : Windows 인증 (USER / PASSWORD 무시)
+#   no  : SQL 인증 (USER / PASSWORD 사용)
+TRUSTED_CONNECTION = no
+USER = sa
+PASSWORD = 여기에_비밀번호_입력
+
+TRUST_SERVER_CERTIFICATE = yes
+
+# DB 응답 대기 시간 (초)
+TIMEOUT_SEC = 5
+
+
+[FILTER]
+# 이 값과 SERVER_ID 컬럼이 같은 행만 읽음
+SERVER_ID = Idc_a4e1
+
+# R6500 전송 조건: FLOW_TYPE = 이 값 이고 CURRENT_PORT_ID = 이 값
+# FLOW_TYPE : 1 = IN (정물류), 2 = OUT (역물류)
+# PORT_ID 예: P1 / A4BFN17C_SP01 / A4CIO02C_BP01 / A4BFN22C_DP01 / A4BFN23C_IP01 / A4BFN21C_CP01
+FLOW_TYPE = 2
+PORT_ID = P1
+
+
+[PLC]
+# PLC 로그 읽기와 MSSQL 값 쓰기 모두 이 연결 1개로 처리
+IP = 192.168.0.20
+PORT = 7777
+TIMEOUT_SEC = 2
+
+# FLOW_TYPE / PORT_ID 조건에 맞는 CARRIER_ID 1개를 쓰는 주소 (4워드 = 최대 8문자)
+PORT_CARRIER_DEVICE = R6500
+
+# CURRENT_PORT_ID / CURRENT_VEHICLE_ID / TARGET_PORT_ID 중 하나라도 값이 있는
+# CARRIER_ID 목록을 쓰는 시작 주소 (1개당 4워드씩: R6600, R6604, R6608 ...)
+CARRIER_LIST_DEVICE = R6600
+
+# 위 목록 조건에 맞는 CARRIER_ID 총 개수를 쓰는 주소 (1워드)
+# 목록 최대 개수를 넘어도 실제 총 개수를 씀
+CARRIER_COUNT_DEVICE = R6599
+
+# 목록 최대 개수 (20 이면 R6600 ~ R6679 사용)
+CARRIER_LIST_MAX = 20
+
+# CARRIER_ID 1개당 워드 수 (4워드 = 8문자)
+CARRIER_WORDS = 4
+
+# PLC 쓰기는 값이 바뀌었을 때만 하고, 추가로 이 주기(초)마다 1번 같은 값을 다시 씀
+# (PLC 재시작 등으로 PLC 쪽 값이 지워졌을 때 복구용)
+PLC_REFRESH_SEC = 60
+
+
+[RUN]
+# PLC 주소 읽기(로그) 주기 (초)
+PLC_POLL_SEC = 0.2
+
+# DB 조회 주기 (초) - 주기마다 SERVER_ID 일치하는 모든 행을 1번에 읽음
+DB_POLL_SEC = 5.0
+
+# DB / PLC 끊겼을 때 재접속 대기 (초)
+RECONNECT_SEC = 5.0
+
+# 로그 저장 경로 (비워두면 exe 폴더\log, 예: C:\ca\AirLock\log)
+LOG_DIR =
+
+# 로그 파일 보관 개수 (하루 1개 파일)
+MAX_LOG_FILES = 30
