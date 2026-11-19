@@ -133,7 +133,10 @@ def load_config():
 
     try:
         cfg = {
-            "db_server": get("MSSQL", "SERVER"),
+            "db_server": make_db_server(
+                get("MSSQL", "DB_IP", get("MSSQL", "SERVER", "")),
+                get("MSSQL", "DB_PORT", ""),
+            ),
             "db_name": get("MSSQL", "DATABASE"),
             "db_table": get("MSSQL", "TABLE"),
             "db_driver": get("MSSQL", "DRIVER", "SQL Server"),
@@ -164,6 +167,9 @@ def load_config():
     except ValueError as e:
         raise ConfigError(f"설정 값 형식 오류: {e}")
 
+    if not cfg["db_server"]:
+        raise ConfigError("설정 누락: [MSSQL] DB_IP")
+
     if not cfg["db_trusted"] and not cfg["db_user"]:
         raise ConfigError("SQL 인증(TRUSTED_CONNECTION = no) 인데 USER 가 비어 있습니다")
 
@@ -178,6 +184,21 @@ def load_config():
             raise ConfigError(f"PLC 주소 형식 오류: {cfg[key]}")
 
     return cfg
+
+
+def make_db_server(ip, port):
+    """DB_IP + DB_PORT -> ODBC SERVER 값 (예: 192.168.0.10,1433)"""
+    ip = ip.strip()
+    port = port.strip()
+
+    # 예전 형식(SERVER = IP,포트) 또는 DB_IP 에 포트까지 쓴 경우 그대로 사용
+    if not ip or not port or "," in ip:
+        return ip
+
+    if not port.isdigit():
+        raise ConfigError(f"DB_PORT 는 숫자여야 합니다: {port}")
+
+    return f"{ip},{port}"
 
 
 def quote_table(table_name):
