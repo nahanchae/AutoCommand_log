@@ -682,6 +682,7 @@ def load_config():
             "plc_timeout": float(get("PLC", "TIMEOUT_SEC", "2")),
             "port_carrier_device": get("PLC", "PORT_CARRIER_DEVICE", "R6500").upper(),
             "carrier_list_device": get("PLC", "CARRIER_LIST_DEVICE", "R6600").upper(),
+            "carrier_count_device": get("PLC", "CARRIER_COUNT_DEVICE", "R6599").upper(),
             "carrier_list_max": int(get("PLC", "CARRIER_LIST_MAX", "20")),
             "carrier_words": int(get("PLC", "CARRIER_WORDS", "4")),
             "plc_refresh_sec": float(get("PLC", "PLC_REFRESH_SEC", "60")),
@@ -717,9 +718,28 @@ def load_config():
                         cfg["db_table"]):
         raise ConfigError(f"TABLE 이름 형식 오류: {cfg['db_table']}")
 
-    for key in ("port_carrier_device", "carrier_list_device"):
+    for key in ("port_carrier_device", "carrier_list_device", "carrier_count_device"):
         if not re.fullmatch(r"[A-Z]+[0-9]+", cfg[key]):
             raise ConfigError(f"PLC 주소 형식 오류: {cfg[key]}")
+
+    # 전송 주소끼리 겹치면 서로 덮어쓰므로 시작 전에 확인
+    areas = [
+        ("PORT_CARRIER_DEVICE", cfg["port_carrier_device"], cfg["carrier_words"]),
+        ("CARRIER_LIST_DEVICE", cfg["carrier_list_device"],
+         cfg["carrier_words"] * cfg["carrier_list_max"]),
+        ("CARRIER_COUNT_DEVICE", cfg["carrier_count_device"], 1),
+    ]
+    for i in range(len(areas)):
+        for j in range(i + 1, len(areas)):
+            name1, head1, size1 = areas[i]
+            name2, head2, size2 = areas[j]
+            dev1, num1 = split_device(head1)
+            dev2, num2 = split_device(head2)
+            if dev1 == dev2 and num1 < num2 + size2 and num2 < num1 + size1:
+                raise ConfigError(
+                    f"PLC 주소 겹침: {name1}={device_range_text(head1, size1)} / "
+                    f"{name2}={device_range_text(head2, size2)}"
+                )
 
     return cfg
 
@@ -1033,6 +1053,9 @@ def process_db_rows(mc, rows, cfg, state):
     max_count = cfg["carrier_list_max"]
     send_list = carrier_list[:max_count]
 
+    # 조건에 맞는 CARRIER_ID 총 수 (목록 최대 개수를 넘어도 전체 개수)
+    total_count = len(carrier_list)
+
     if refresh or carrier_list != state.get("carrier_list"):
         values = []
         for i in range(max_count):
@@ -1040,6 +1063,9 @@ def process_db_rows(mc, rows, cfg, state):
             values.extend(string_to_words(carrier_id, words))
 
         write_words(mc, cfg["carrier_list_device"], values)
+
+        # 3) 총 수 -> R6599 (1워드)
+        write_words(mc, cfg["carrier_count_device"], [min(total_count, 0xFFFF)])
 
     if carrier_list != state.get("carrier_list"):
         dev, base = split_device(cfg["carrier_list_device"])
@@ -1068,7 +1094,8 @@ def process_db_rows(mc, rows, cfg, state):
 
         write_carrier_block(
             f"[CARRIER LIST] SERVER_ID={cfg['server_id']} | "
-            f"{len(send_list)}개 | {dev_text} 전송",
+            f"총 {total_count}개 -> {cfg['carrier_count_device']} | "
+            f"{dev_text} 전송",
             lines
         )
 

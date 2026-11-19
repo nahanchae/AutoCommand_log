@@ -66,6 +66,10 @@ PORT_CARRIER_DEVICE = R6500
 # CARRIER_ID 목록을 쓰는 시작 주소 (1개당 4워드씩: R6600, R6604, R6608 ...)
 CARRIER_LIST_DEVICE = R6600
 
+# 위 목록 조건에 맞는 CARRIER_ID 총 개수를 쓰는 주소 (1워드)
+# 목록 최대 개수를 넘어도 실제 총 개수를 씀
+CARRIER_COUNT_DEVICE = R6599
+
 # 목록 최대 개수 (20 이면 R6600 ~ R6679 사용)
 CARRIER_LIST_MAX = 20
 
