@@ -70,6 +70,13 @@ CARRIER_LIST_DEVICE = R6600
 # 목록 최대 개수를 넘어도 실제 총 개수를 씀
 CARRIER_COUNT_DEVICE = R6599
 
+# 하트비트 주소 (프로그램 동작 확인용, 비워두면 사용 안 함)
+#   HEARTBEAT_SEC 마다 0 -> 1 -> 0 -> 1 로 바꿔 씀
+#   PLC 에서는 이 값이 HEARTBEAT_SEC x 3 (예: 15초) 이상 안 바뀌면 프로그램 정지로 판단
+#   워드(R, D, W) 또는 비트(M, B, L) 주소 사용 가능
+HEARTBEAT_DEVICE = R6598
+HEARTBEAT_SEC = 5
+
 # 목록 최대 개수 (20 이면 R6600 ~ R6679 사용)
 CARRIER_LIST_MAX = 20
 

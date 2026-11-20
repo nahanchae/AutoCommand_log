@@ -10,6 +10,8 @@
      R6600 ~       : CURRENT_PORT_ID / CURRENT_VEHICLE_ID / TARGET_PORT_ID
                      중 하나라도 값이 있는 CARRIER_ID 목록 (1개당 4워드)
      R6599         : 위 목록의 총 개수
+     R6598         : 하트비트 (5초마다 0 -> 1 -> 0 -> 1)
+                     PLC 에서 15초 이상 안 바뀌면 프로그램 정지로 판단
  - 로그 파일 : 로그폴더\plc_log_날짜.txt (하루 1개, 30일 보관)
 
 
@@ -43,6 +45,8 @@
 
  [PLC]
    IP / PORT = PLC 주소
+   HEARTBEAT_DEVICE = 하트비트 주소 (비워두면 사용 안 함)
+   HEARTBEAT_SEC    = 하트비트 전환 주기 (초)
 
  [RUN]
    LOG_DIR   = 로그 저장 폴더 (비워두면 exe 폴더\log)

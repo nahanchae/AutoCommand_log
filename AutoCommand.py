@@ -687,6 +687,10 @@ def load_config():
             "carrier_words": int(get("PLC", "CARRIER_WORDS", "4")),
             "plc_refresh_sec": float(get("PLC", "PLC_REFRESH_SEC", "60")),
 
+            # 하트비트: 비워두면 사용 안 함
+            "heartbeat_device": get("PLC", "HEARTBEAT_DEVICE", "").upper(),
+            "heartbeat_sec": float(get("PLC", "HEARTBEAT_SEC", "5")),
+
             "plc_poll_sec": float(get("RUN", "PLC_POLL_SEC", "0.2")),
             "db_poll_sec": float(get("RUN", "DB_POLL_SEC", get("RUN", "POLL_SEC", "5.0"))),
             "reconnect_sec": float(get("RUN", "RECONNECT_SEC", "5.0")),
@@ -695,6 +699,18 @@ def load_config():
         }
     except ValueError as e:
         raise ConfigError(f"설정 값 형식 오류: {e}")
+
+    # 하트비트 주소 검사 (MSSQL 사용 여부와 관계없이)
+    hb = cfg["heartbeat_device"]
+    if hb:
+        if not re.fullmatch(r"[A-Z]+[0-9]+", hb):
+            raise ConfigError(f"HEARTBEAT_DEVICE 형식 오류: {hb}")
+        if split_device(hb)[0] not in HEARTBEAT_DEVS:
+            raise ConfigError(
+                f"HEARTBEAT_DEVICE 는 {', '.join(sorted(HEARTBEAT_DEVS))} 만 가능: {hb}"
+            )
+        if cfg["heartbeat_sec"] <= 0:
+            raise ConfigError("HEARTBEAT_SEC 는 0 보다 커야 합니다")
 
     if not cfg["db_enable"]:
         return cfg
@@ -729,6 +745,8 @@ def load_config():
          cfg["carrier_words"] * cfg["carrier_list_max"]),
         ("CARRIER_COUNT_DEVICE", cfg["carrier_count_device"], 1),
     ]
+    if hb:
+        areas.append(("HEARTBEAT_DEVICE", hb, 1))
     for i in range(len(areas)):
         for j in range(i + 1, len(areas)):
             name1, head1, size1 = areas[i]
@@ -922,6 +940,40 @@ def device_range_text(head_device, word_count):
 
 def write_words(mc, head_device, values):
     mc.batchwrite_wordunits(headdevice=head_device, values=values)
+
+
+# ==================================================
+# 하트비트
+# 프로그램이 살아 있으면 HEARTBEAT_SEC 마다 0 -> 1 -> 0 -> 1 로 바꿔 씀
+# PLC 는 이 값이 일정 시간(예: 15초) 이상 안 바뀌면 프로그램 정지로 판단
+# ==================================================
+# 하트비트로 쓸 수 있는 장치 (X 는 입력이라 제외)
+HEARTBEAT_DEVS = {"R", "D", "W", "M", "B", "L"}
+
+
+def process_heartbeat(mc, cfg, hb_state):
+    device = cfg["heartbeat_device"]
+    if not device:
+        return
+
+    now = time.monotonic()
+    last = hb_state.get("last_time")
+
+    # 아직 주기가 안 됐으면 넘어감 (PLC 연결 직후에는 바로 씀)
+    if last is not None and now - last < cfg["heartbeat_sec"]:
+        return
+
+    value = 1 - hb_state.get("value", 1)     # 처음 값은 0
+
+    dev, _ = split_device(device)
+    if dev in WORD_DEVS:
+        mc.batchwrite_wordunits(headdevice=device, values=[value])
+    else:
+        mc.batchwrite_bitunits(headdevice=device, values=[value])
+
+    # 쓰기 성공한 뒤에 상태 갱신 (실패하면 재접속 후 다시 씀)
+    hb_state["value"] = value
+    hb_state["last_time"] = now
 
 
 
@@ -1223,6 +1275,17 @@ def main():
 
     write_plc_log(f"[START] 프로그램 시작 | PID={os.getpid()} | CONFIG={CONFIG_PATH}")
 
+    # 하트비트 상태
+    hb_state = {}
+
+    if cfg["heartbeat_device"]:
+        write_plc_log(
+            f"[CONFIG] 하트비트 {cfg['heartbeat_device']} | "
+            f"{cfg['heartbeat_sec']}초마다 0/1 전환"
+        )
+    else:
+        write_plc_log("[CONFIG] 하트비트 사용 안 함 (HEARTBEAT_DEVICE 비어 있음)")
+
     # MSSQL -> PLC 전송 (DB 조회 스레드)
     db_worker = None
     db_state = {}
@@ -1289,6 +1352,9 @@ def main():
             db_state.clear()
             db_force = True
 
+            # PLC 재접속 직후에는 하트비트를 바로 씀
+            hb_state.pop("last_time", None)
+
             while True:
                 today = datetime.now().date()
 
@@ -1314,6 +1380,9 @@ def main():
 
                 # 태그 리스트 (M6000 = 1 일 때만 별도 읽기)
                 process_tag_list(mc, data, tag_state)
+
+                # 하트비트 (HEARTBEAT_SEC 마다 0/1 전환)
+                process_heartbeat(mc, cfg, hb_state)
 
                 # MSSQL 조회 결과가 새로 들어왔으면 PLC 로 전송
                 if db_worker is not None:
